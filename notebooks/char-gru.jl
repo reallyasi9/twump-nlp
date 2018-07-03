@@ -21,7 +21,7 @@ tweetTexts = collect(normalize_string(t["text"], :NFKC) for t in tweets)
 fullText = join(tweetTexts, STOP_CHAR)
 
 # Get the frequencies of character use and make a sensible cut
-freqs = Flux.frequencies(text)
+freqs = Flux.frequencies(fullText)
 alphabetCutoff = 1e-3
 alphabet = [pair[1] for pair in freqs if pair[2]/length(tweetTexts) > alphabetCutoff]
 if !in(STOP_CHAR, alphabet)
