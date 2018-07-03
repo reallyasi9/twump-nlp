@@ -1,0 +1,5 @@
+Pkg.update()
+Pkg.add("Flux")
+Pkg.add("JSON")
+Pkg.add("HTTP")
+Pkg.add("StatsBase")
