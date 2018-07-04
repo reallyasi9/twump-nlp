@@ -1,4 +1,5 @@
 using Flux
+using Flux: @epochs
 using JSON
 using HTTP
 using StatsBase
@@ -71,7 +72,9 @@ function sampleTweet(m, alphabet, len; temp = 1)
     String(take!(buf))
 end
 
-sampleCallback = () -> @show sampleTweet(model, alphabet, 140; temp = 0.9)
+function sampleCallback()
+    println("$(Dates.now()): $(sampleTweet(model, alphabet, 140; temp = 0.9))")
+end
 
-Flux.train!(loss, zip(Xs, Ys), optimizer,
-    cb=[Flux.throttle(lossCallback, 30)])
+@epochs 20 Flux.train!(loss, zip(Xs, Ys), optimizer,
+    cb=[Flux.throttle(lossCallback, 30), Flux.throttle(sampleCallback, 120)])
