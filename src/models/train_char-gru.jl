@@ -138,7 +138,7 @@ function sampleTweet(m, start::AbstractString, alphabet::Vector{Char}, len::Inte
 end
 
 function sampleCallback()
-    start = split(rand(tweetTexts))[1]
+    start = split(rand(tweetTexts))[1] * " "
     for temp in 0.:0.25:1.25
         tweet = sampleTweet(model, start, alphabet, MAX_CHARS; temp = temp)
         @info "$(Dates.now()) Sample generated tweet" start temp tweet
