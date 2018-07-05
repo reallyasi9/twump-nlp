@@ -101,23 +101,20 @@ optimizer = Flux.ADAM(Flux.params(model), 0.01)
 
 function lossCallback()
     idx = rand(1:length(Xs))
-    @info "Approximate loss" idx loss(Xs[idx], Ys[idx])
-    flush(logFile)
+    @info "$(Dates.now()) Approximate loss" idx loss(Xs[idx], Ys[idx])
 end
 
 
-function twsample(rng::AbstractRNG, p::AbstractVector; temperature::Real = 1.)
+function twsample(p::AbstractVector; temperature::Real = 1.)
     if temperature > 0
         p_ = log.(p) ./ temperature
         p_ = exp.(p_)
         p_ = p_ ./ sum(p_)
-        StatsBase.sample(rng, p_)
+        StatsBase.sample(StatsBase.weights(p_))
     else
         Flux.argmax(p)
     end
 end
-
-twsample(p::AbstractVector; temperature::Real = 1.) = twsample(Base.Random.GLOBAL_RNG, p, temperature)
 
 function sampleTweet(m, start::AbstractString, alphabet::Vector{Char}, len::Integer; temp::Real = 1)
     Flux.reset!(m)
@@ -134,7 +131,7 @@ function sampleTweet(m, start::AbstractString, alphabet::Vector{Char}, len::Inte
         if c2 == STOP_CHAR
             break
         end
-        c2 = alphabet[twsample(m(Flux.onehot(c2, alphabet)).data, temperature = temp)]
+        c2 = alphabet[twsample(m(Flux.onehot(c2, alphabet)).data; temperature = temp)]
     end
 
     String(take!(buf))
@@ -144,9 +141,8 @@ function sampleCallback()
     start = split(rand(tweetTexts))[1]
     for temp in 0.:0.25:1.25
         tweet = sampleTweet(model, start, alphabet, MAX_CHARS; temp = temp)
-        @info "Sample generated tweet" start temp tweet
+        @info "$(Dates.now()) Sample generated tweet" start temp tweet
     end
-    flush(logFile)
 end
 
 nEpochs = 10
@@ -154,7 +150,7 @@ for epoch in 1:nEpochs
     @info "Training" progress=epoch/nEpochs
     p = randperm(length(Xs))
     Flux.train!(loss, Iterators.zip(Xs[p], Ys[p]), optimizer,
-        cb=[Flux.throttle(lossCallback, 60), Flux.throttle(sampleCallback, 60)])
+        cb=[Flux.throttle(lossCallback, 30), Flux.throttle(sampleCallback, 30)])
     outFile = "char-gru_epoch$(epoch).bson"
     @info "Batches complete, saving model" outFile
     @save outFile model
