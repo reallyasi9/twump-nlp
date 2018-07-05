@@ -1,6 +1,7 @@
 Pkg.update()
 Pkg.add("Flux")
 Pkg.add("JSON")
+Pkg.add("BSON")
 Pkg.add("HTTP")
 Pkg.add("StatsBase")
 Pkg.add("MicroLogging")

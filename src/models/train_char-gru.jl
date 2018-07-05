@@ -1,6 +1,7 @@
 using Flux
 using Flux: @epochs
 using JSON
+using BSON: @save
 using HTTP
 using StatsBase
 using MicroLogging
@@ -68,7 +69,6 @@ Ys = Flux.chunk(predictedOneHots, nBatch)
 model = Flux.Chain(
     Flux.GRU(nChars, 128),
     Flux.GRU(128, 128),
-    Flux.GRU(128, 128),
     Flux.Dense(128, nChars),
     Flux.softmax)
 
@@ -100,3 +100,5 @@ end
 
 @epochs 20 Flux.train!(loss, zip(Xs, Ys), optimizer,
     cb=[Flux.throttle(lossCallback, 30), Flux.throttle(sampleCallback, 120)])
+
+@save "char-gru.bson" model
