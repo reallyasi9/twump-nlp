@@ -8,14 +8,12 @@ using BSON: @save
 using HTTP
 using StatsBase
 using MicroLogging
-using MLDataUtils
-using Distributions
 
 # Set up logging to file
 dfmt = dateformat"yyyy-mm-dd-HHMMSS"
-logFile = splitext(basename(PROGRAM_FILE))[1] * "-$(Dates.format(startTime, dfmt)).log"
-logger = MicroLogging.InteractiveLogger(open(logFile, "w"))
-MicroLogging.configure_logging(logger)
+logFile = open(splitext(basename(PROGRAM_FILE))[1] * "-$(Dates.format(startTime, dfmt)).log", "w")
+logger = MicroLogging.SimpleLogger(logFile)
+MicroLogging.global_logger(logger)
 
 # Download complete dataset
 const BASE_URL = "http://www.trumptwitterarchive.com/data/realdonaldtrump"
@@ -36,20 +34,20 @@ function getJSONTweets(year::Integer)
     JSON.parse(transcode(String, r.body))
 end
 
-"""makeAlphabet(tweets; cutoff)
+"""makeAlphabet(text; cutoff)
 
-Scans through the given tweets and generates an alphabet of all used characters.
-Drops characters that have a usage rate per tweet of less than `cutoff`.  For
-instance, if 100 tweets are given and `cutoff = 0.1`, then characters appearing
-in fewer than 10% of the tweets will be ignored.
+Scans through the given text and generates an alphabet of all used characters.
+Drops characters that have a usage rate per character of less than `cutoff`.  For
+instance, if  `cutoff = 0.001`, then characters appearing less than 0.1% of the
+time will be ignored.
 
 Returns an Array of Chars."""
-function makeAlphabet(tweetTexts::AbstractVector{String}; cutoff::Real = 1e-3)
+function makeAlphabet(text::AbstractString; cutoff::Real = 1e-6)
     @assert cutoff > 0 && cutoff <= 1 "cutoff must be in the range (0,1], $cutoff given"
 
     fullText = join(tweetTexts)
-    freqs = Flux.frequencies(fullText)
-    alphabet = [pair[1] for pair in freqs if pair[2]/length(tweetTexts) > cutoff]
+    freqs = Flux.frequencies(text)
+    alphabet = [pair[1] for pair in freqs if pair[2]/length(text) > cutoff]
     if !in(STOP_CHAR, alphabet)
         append!(alphabet, STOP_CHAR)
     end
@@ -59,49 +57,36 @@ function makeAlphabet(tweetTexts::AbstractVector{String}; cutoff::Real = 1e-3)
     return alphabet
 end
 
-"""padAndTrim(m, padVec, len)
-
-Pads OneHotMatrix `m` to the right out to `len` columns, filling with `padVec`
-as needed.  If the number of columns in `m` is greater than `len`, trims `m` to
-`len` columns.  Also, forces the last column of `m` to be `padVec` no matter
-its original value.
-
-Returns a new `OneHotMatrix` with the same number of rows as `m`, but with
-exactly `len` columns."""
-function padAndTrim(m::Flux.OneHotMatrix, padVec::Flux.OneHotVector, len::Integer)
-    d2 = min(size(m, 2), len)
-    m_ = Flux.OneHotMatrix(m.height, [m[:, 1:d2].data; fill(padVec, max(len - d2, 0))])
-    m_.data[d2] = padVec
-    m_
-end
-
 # Collect the tweets into a single array of strings
 tweets = Iterators.flatten(getJSONTweets(y) for y in 2009:Dates.year(Dates.now()))
 @info "# Processing tweets"
 tweetTexts = collect(normalize_string(t["text"], :NFKC) for t in tweets)
+tweetText = join(tweetTexts, STOP_CHAR)
 
 @info "# Making alphabet"
-alphabet = makeAlphabet(tweetTexts)
+alphabet = makeAlphabet(tweetText, cutoff=1e-5)
 nChars = length(alphabet)
 
 stopVec = Flux.onehot(STOP_CHAR, alphabet)
-makeOneHots(texts::Vector{String}, alphabet::Vector{Char}, batchSize::Integer) = Iterators.partition((padAndTrim(Flux.onehotbatch(text, alphabet, UNKNOWN_CHAR), stopVec, MAX_CHARS) for text in texts), batchSize)
-# Predictions are just the next character in line,
-# except that the last character is always STOP_CHAR.
-makePredicted(texts::Vector{String}, alphabet::Vector{Char}, batchSize::Integer) = Iterators.partition((padAndTrim(Flux.onehotbatch(text[chr2ind(text,2):end] * STOP_CHAR, alphabet, UNKNOWN_CHAR), stopVec, MAX_CHARS) for text in texts), batchSize)
+function makeOneHots(text::AbstractString, alphabet::Vector{Char}; batches::Integer = 64, sequenceLength::Integer = 140, start::Integer = 1, stopChar::Char = STOP_CHAR, padChar::Char = UNKNOWN_CHAR)
+    stopText = string(stopChar)
+    stopVec = Flux.onehot(stopChar, alphabet)
+    t = text[chr2ind(text, start):end] * stopText^start
+    x = [Flux.onehot(ch, alphabet, padChar) for ch in t]
+    x = Flux.chunk(x, batches)
+    x = Flux.batchseq(x, stopVec)
+    x = Iterators.partition(x, sequenceLength)
+    collect(x)
+end
 
 @info "# Converting to one-hots"
-batchSize = 64
-Xs = collect(makeOneHots(tweetTexts, alphabet, batchSize))
-Ys = collect(makePredicted(tweetTexts, alphabet, batchSize))
-
-#@info "Creating predictors and prediction targets"
-#Xs = Flux.chunk(tweetOneHots, nBatch)
-# Predict the very next character
-#Ys = Flux.chunk(predictedOneHots, nBatch)
+nBatches = 64
+Xs = makeOneHots(tweetText, alphabet, batches = nBatches)
+Ys = makeOneHots(tweetText, alphabet, batches = nBatches, start = 2)
 
 model = Flux.Chain(
     Flux.GRU(nChars, 128),
+    Flux.GRU(128, 128),
     Flux.GRU(128, 128),
     Flux.Dense(128, nChars),
     Flux.softmax)
@@ -116,44 +101,63 @@ optimizer = Flux.ADAM(Flux.params(model), 0.01)
 
 function lossCallback()
     idx = rand(1:length(Xs))
-    println("$(Dates.now()): $(loss(Xs[idx], Ys[idx]))")
+    @info "Approximate loss" idx loss(Xs[idx], Ys[idx])
+    flush(logFile)
 end
 
 
-function twsample(p::AbstractVector; temperature::Real = 1.)
-    p_ = p ./ sum(p)
-    p_ = log.(p_) ./ temperature
-    p_ = exp.(p_)
-    p_ = p_ ./ sum(p_)
-    m = Distributions.Multinomial(1, p_)
-    Flux.argmax(rand(m))
+function twsample(rng::AbstractRNG, p::AbstractVector; temperature::Real = 1.)
+    if temperature > 0
+        p_ = log.(p) ./ temperature
+        p_ = exp.(p_)
+        p_ = p_ ./ sum(p_)
+        StatsBase.sample(rng, p_)
+    else
+        Flux.argmax(p)
+    end
 end
 
-function sampleTweet(m, alphabet, len; temp = 1)
-    # TODO: implement temperature
+twsample(p::AbstractVector; temperature::Real = 1.) = twsample(Base.Random.GLOBAL_RNG, p, temperature)
+
+function sampleTweet(m, start::AbstractString, alphabet::Vector{Char}, len::Integer; temp::Real = 1)
     Flux.reset!(m)
     buf = IOBuffer()
-    c = rand(alphabet)
-    for i in 1:len
+
+    c2 = ' '
+    for c in start
         write(buf, c)
-        if c == STOP_CHAR
+        c2 = alphabet[Flux.argmax(m(Flux.onehot(c, alphabet)).data)]
+    end
+
+    for i in 1:(len - length(start))
+        write(buf, c2)
+        if c2 == STOP_CHAR
             break
         end
-        c = alphabet[twsample(m(Flux.onehot(c, alphabet)).data, temperature = temp)]
+        c2 = alphabet[twsample(m(Flux.onehot(c2, alphabet)).data, temperature = temp)]
     end
+
     String(take!(buf))
 end
 
 function sampleCallback()
-    println("$(Dates.now()): $(sampleTweet(model, alphabet, 280; temp = 0.9))")
+    start = split(rand(tweetTexts))[1]
+    for temp in 0.:0.25:1.25
+        tweet = sampleTweet(model, start, alphabet, MAX_CHARS; temp = temp)
+        @info "Sample generated tweet" start temp tweet
+    end
+    flush(logFile)
 end
 
 nEpochs = 10
 for epoch in 1:nEpochs
     @info "Training" progress=epoch/nEpochs
-    data = MLDataUtils.shuffleobs((Xs, Ys))
-    Flux.train!(loss, data, optimizer,
-        cb=[Flux.throttle(lossCallback, 30), Flux.throttle(sampleCallback, 120)])
+    p = randperm(length(Xs))
+    Flux.train!(loss, Iterators.zip(Xs[p], Ys[p]), optimizer,
+        cb=[Flux.throttle(lossCallback, 60), Flux.throttle(sampleCallback, 60)])
+    outFile = "char-gru_epoch$(epoch).bson"
+    @info "Batches complete, saving model" outFile
+    @save outFile model
 end
 
-@save "char-gru.bson" model
+close(logFile)
