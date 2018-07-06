@@ -1,6 +1,7 @@
 # Note when execution began
 startTime = Dates.now()
 
+#using CuArrays
 using Flux
 using Flux: @epochs
 using JSON
@@ -42,8 +43,8 @@ instance, if  `cutoff = 0.001`, then characters appearing less than 0.1% of the
 time will be ignored.
 
 Returns an Array of Chars."""
-function makeAlphabet(text::AbstractString; cutoff::Real = 1e-6)
-    @assert cutoff > 0 && cutoff <= 1 "cutoff must be in the range (0,1], $cutoff given"
+function makeAlphabet(text::AbstractString; cutoff::Real = 0)
+    @assert cutoff >= 0 && cutoff <= 1 "cutoff must be in the range [0,1], $cutoff given"
 
     fullText = join(tweetTexts)
     freqs = Flux.frequencies(text)
@@ -68,7 +69,10 @@ alphabet = makeAlphabet(tweetText, cutoff=1e-5)
 nChars = length(alphabet)
 
 stopVec = Flux.onehot(STOP_CHAR, alphabet)
-function makeOneHots(text::AbstractString, alphabet::Vector{Char}; batches::Integer = 64, sequenceLength::Integer = 140, start::Integer = 1, stopChar::Char = STOP_CHAR, padChar::Char = UNKNOWN_CHAR)
+function makeOneHots(text::AbstractString, alphabet::Vector{Char};
+        batches::Integer = 64, sequenceLength::Integer = MAX_CHARS,
+        start::Integer = 1, stopChar::Char = STOP_CHAR,
+        padChar::Char = UNKNOWN_CHAR)
     stopText = string(stopChar)
     stopVec = Flux.onehot(stopChar, alphabet)
     t = text[chr2ind(text, start):end] * stopText^start
@@ -85,14 +89,18 @@ Xs = makeOneHots(tweetText, alphabet, batches = nBatches)
 Ys = makeOneHots(tweetText, alphabet, batches = nBatches, start = 2)
 
 model = Flux.Chain(
-    Flux.GRU(nChars, 128),
-    Flux.GRU(128, 128),
-    Flux.GRU(128, 128),
+    Flux.GRU(nChars, 512),
+    Flux.GRU(512, 256),
+    Flux.GRU(256, 128),
     Flux.Dense(128, nChars),
     Flux.softmax)
 
+#model = gpu(model)
+
 function loss(xs, ys)
-    l = sum(Flux.crossentropy.(model.(xs), ys))
+    #xs = gpu.(xs)
+    #ys = gpu.(ys)
+    l = sum(Flux.crossentropy.(model.(xs)), ys)
     Flux.truncate!(model)
     return l
 end
@@ -101,7 +109,9 @@ optimizer = Flux.ADAM(Flux.params(model), 0.01)
 
 function lossCallback()
     idx = rand(1:length(Xs))
-    @info "$(Dates.now()) Approximate loss" idx loss(Xs[idx], Ys[idx])
+    #tx, ty = (gpu.(Xs[idx]), gpu.(Ys[idx]))
+    tx, ty = (Xs[idx], Ys[idx])
+    @info "$(Dates.now()) Approximate loss" idx loss(tx, ty)
 end
 
 
@@ -117,13 +127,15 @@ function twsample(p::AbstractVector; temperature::Real = 1.)
 end
 
 function sampleTweet(m, start::AbstractString, alphabet::Vector{Char}, len::Integer; temp::Real = 1)
+    #m = cpu(m)
     Flux.reset!(m)
     buf = IOBuffer()
 
     c2 = ' '
     for c in start
         write(buf, c)
-        c2 = alphabet[Flux.argmax(m(Flux.onehot(c, alphabet)).data)]
+        v = Flux.onehot(c, alphabet, UNKNOWN_CHAR)
+        c2 = alphabet[Flux.argmax(m(v).data)]
     end
 
     for i in 1:(len - length(start))
@@ -131,7 +143,8 @@ function sampleTweet(m, start::AbstractString, alphabet::Vector{Char}, len::Inte
         if c2 == STOP_CHAR
             break
         end
-        c2 = alphabet[twsample(m(Flux.onehot(c2, alphabet)).data; temperature = temp)]
+        v = Flux.onehot(c2, alphabet, UNKNOWN_CHAR)
+        c2 = alphabet[twsample(m(v).data, temperature = temp)]
     end
 
     String(take!(buf))
@@ -143,14 +156,16 @@ function sampleCallback()
         tweet = sampleTweet(model, start, alphabet, MAX_CHARS; temp = temp)
         @info "$(Dates.now()) Sample generated tweet" start temp tweet
     end
+    nothing
 end
 
-nEpochs = 10
+nEpochs = 100
 for epoch in 1:nEpochs
     @info "Training" progress=epoch/nEpochs
     p = randperm(length(Xs))
     Flux.train!(loss, Iterators.zip(Xs[p], Ys[p]), optimizer,
-        cb=[Flux.throttle(lossCallback, 30), Flux.throttle(sampleCallback, 30)])
+        cb=[Flux.throttle(lossCallback, 30)])
+    sampleCallback()
     outFile = "char-gru_epoch$(epoch).bson"
     @info "Batches complete, saving model" outFile
     @save outFile model

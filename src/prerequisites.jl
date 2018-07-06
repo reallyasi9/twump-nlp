@@ -1,4 +1,5 @@
 Pkg.update()
+#Pkg.add("CuArrays")
 Pkg.add("Flux")
 Pkg.add("JSON")
 Pkg.add("BSON")
