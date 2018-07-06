@@ -89,9 +89,9 @@ Xs = makeOneHots(tweetText, alphabet, batches = nBatches)
 Ys = makeOneHots(tweetText, alphabet, batches = nBatches, start = 2)
 
 model = Flux.Chain(
-    Flux.GRU(nChars, 512),
-    Flux.GRU(512, 256),
+    Flux.GRU(nChars, 256),
     Flux.GRU(256, 128),
+    Flux.GRU(128, 128),
     Flux.Dense(128, nChars),
     Flux.softmax)
 
