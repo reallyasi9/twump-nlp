@@ -100,7 +100,7 @@ model = Flux.Chain(
 function loss(xs, ys)
     #xs = gpu.(xs)
     #ys = gpu.(ys)
-    l = sum(Flux.crossentropy.(model.(xs)), ys)
+    l = sum(Flux.crossentropy.(model.(xs), ys))
     Flux.truncate!(model)
     return l
 end
@@ -110,8 +110,8 @@ optimizer = Flux.ADAM(Flux.params(model), 0.01)
 function lossCallback()
     idx = rand(1:length(Xs))
     #tx, ty = (gpu.(Xs[idx]), gpu.(Ys[idx]))
-    tx, ty = (Xs[idx], Ys[idx])
-    @info "$(Dates.now()) Approximate loss" idx loss(tx, ty)
+    #tx, ty = (Xs[idx], Ys[idx])
+    @info "$(Dates.now()) Approximate loss" idx loss(Xs[idx], Ys[idx])
 end
 
 
