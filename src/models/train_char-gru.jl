@@ -164,8 +164,7 @@ for epoch in 1:nEpochs
     @info "Training" progress=epoch/nEpochs
     p = randperm(length(Xs))
     Flux.train!(loss, Iterators.zip(Xs[p], Ys[p]), optimizer,
-        cb=[Flux.throttle(lossCallback, 30)])
-    sampleCallback()
+        cb=[Flux.throttle(lossCallback, 30), Flux.throttle(sampleCallback, 60)])
     outFile = "char-gru_epoch$(epoch).bson"
     @info "Batches complete, saving model" outFile
     @save outFile model
